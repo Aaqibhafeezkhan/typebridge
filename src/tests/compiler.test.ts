@@ -1,5 +1,9 @@
 import { test, describe } from 'node:test';
 import * as assert from 'node:assert';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { parseTypeScript } from '../parsers/typescript';
 import { compile } from '../generators';
 
@@ -188,4 +192,34 @@ describe('TypeBridge Compiler Suite', () => {
     assert.strictEqual(stats.documentedFieldsCount, 1);
     assert.strictEqual(stats.docCoveragePercent, 50);
   });
+
+  test('CLI dry-run previews generated output without writing files', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'typebridge-dry-run-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'schema.ts'), 'export interface User { id: string; }\n');
+      fs.writeFileSync(path.join(dir, 'user.json'), '{ "old": true }\n');
+      const cli = path.resolve(__dirname, '../cli/index.js');
+      const result = spawnSync(process.execPath, [cli, 'generate', '-i', 'schema.ts', '-t', 'json-schema', '-o', 'user.json', '--dry-run'], { cwd: dir, encoding: 'utf8', env: { ...process.env, FORCE_COLOR: '1' } });
+      assert.strictEqual(result.status, 0, result.stderr);
+      assert.ok(result.stdout.includes('[DRY RUN] Would update user.json'));
+      assert.ok(result.stdout.includes('\u001b[32m') || result.stdout.includes('\u001b[31m'));
+      assert.strictEqual(fs.readFileSync(path.join(dir, 'user.json'), 'utf8'), '{ "old": true }\n');
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test('CLI check prints a colorized line diff when generated output drifts', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'typebridge-check-diff-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'schema.ts'), 'export interface User { id: string; }\n');
+      fs.writeFileSync(path.join(dir, 'user.json'), '{ "old": true }\n');
+      const cli = path.resolve(__dirname, '../cli/index.js');
+      const result = spawnSync(process.execPath, [cli, 'check', '-i', 'schema.ts', '-t', 'json-schema', '-o', 'user.json'], { cwd: dir, encoding: 'utf8', env: { ...process.env, FORCE_COLOR: '1' } });
+      assert.strictEqual(result.status, 1);
+      assert.ok(result.stderr.includes('Schema drift detected'));
+      assert.ok(result.stdout.includes('--- user.json (current)'));
+      assert.ok(result.stdout.includes('\u001b[31m-'));
+      assert.ok(result.stdout.includes('\u001b[32m+'));
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
 });
